@@ -5,7 +5,7 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  base: '/smartmarket/',
+  base: '/smartmarket/', //smartmarket
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
