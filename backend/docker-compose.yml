@@ -1,4 +1,5 @@
-api:
+services:
+  api:
     build: .
     restart: unless-stopped
     environment:
@@ -15,3 +16,12 @@ api:
     depends_on:
       rate-limiter:
         condition: service_healthy
+  rate-limiter:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
