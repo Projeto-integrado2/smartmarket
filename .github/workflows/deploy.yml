@@ -25,6 +25,8 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install
       - run: pnpm build
+        env:
+          VITE_API_URL: https://api-smartmarket.hallissoneduardo.com.br
       - uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
