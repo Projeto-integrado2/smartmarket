@@ -15,7 +15,7 @@ def buscar_produto(termo: str) -> list[dict]:
             (
                 product.name,
                 product.brand,
-                product.category,
+                " ".join(product.categories),
                 product.description,
             )
         ).lower()

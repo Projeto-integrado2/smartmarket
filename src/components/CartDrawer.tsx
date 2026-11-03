@@ -1,8 +1,9 @@
 import type { Product } from '@/types/product'
+import type { CartItem } from '@/types/cart'
 import { formatPrice } from '@/utils/format'
 import { Icon } from './Icon'
 
-export type CartItem = { product: Product; quantity: number }
+export type { CartItem } from '@/types/cart'
 
 export function CartDrawer({
   items,
@@ -10,12 +11,14 @@ export function CartDrawer({
   onChangeQuantity,
   onClear,
   onBrowse,
+  onCheckout,
 }: {
   items: CartItem[]
   onClose: () => void
   onChangeQuantity: (product: Product, quantity: number) => void
   onClear: () => void
   onBrowse: () => void
+  onCheckout: () => void
 }) {
   const itemCount = items.reduce((total, item) => total + item.quantity, 0)
   const subtotal = items.reduce((total, item) => total + item.product.price * item.quantity, 0)
@@ -81,8 +84,9 @@ export function CartDrawer({
               <p className="mt-2 text-xs leading-5 text-[#68746f]">Valores demonstrativos; o subtotal não inclui possíveis taxas ou descontos.</p>
               <div className="mt-5 flex gap-3">
                 <button onClick={onClear} className="secondary-button flex-1">Limpar</button>
-                <button onClick={onClose} className="primary-button flex-1">Continuar comprando</button>
+                <button onClick={onCheckout} className="primary-button flex-1">Finalizar compra</button>
               </div>
+              <button onClick={onBrowse} className="mt-3 w-full text-center text-sm font-bold text-[#173f35] underline underline-offset-4">Continuar comprando</button>
             </footer>
           </>
         )}

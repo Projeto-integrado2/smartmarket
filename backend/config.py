@@ -15,39 +15,46 @@ def _parse_cors_origins(value: str | None) -> list[str]:
     if any(not origin.strip() for origin in origins):
         raise ValueError("CORS_ORIGINS contém uma origem vazia.")
 
-    validated = []
-    for entry in origins:
-        origin = entry.strip()
-        parsed = urlsplit(origin)
-        hostname = parsed.hostname
-        try:
-            port = parsed.port
-        except ValueError as error:
-            raise ValueError(f"Origem inválida em CORS_ORIGINS: {origin}") from error
-
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.netloc
-            or hostname is None
-            or hostname == "*"
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path
-            or parsed.query
-            or parsed.fragment
-            or (port is not None and not 1 <= port <= 65535)
-            or not re.fullmatch(r"[A-Za-z0-9.-]+", hostname)
-            or any(
-                not label or label.startswith("-") or label.endswith("-")
-                for label in hostname.split(".")
-            )
-        ):
-            raise ValueError(f"Origem inválida em CORS_ORIGINS: {origin}")
-        validated.append(origin)
+    validated = [_validate_cors_origin(origin.strip()) for origin in origins]
 
     if len(set(validated)) != len(validated):
         raise ValueError("CORS_ORIGINS não pode repetir origens.")
     return validated
+
+
+def _validate_cors_origin(origin: str) -> str:
+    parsed = urlsplit(origin)
+    hostname = parsed.hostname
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"Origem inválida em CORS_ORIGINS: {origin}") from error
+
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or hostname is None
+        or hostname == "*"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or (port is not None and not 1 <= port <= 65535)
+        or not _is_valid_hostname(hostname)
+    ):
+        raise ValueError(f"Origem inválida em CORS_ORIGINS: {origin}")
+    return origin
+
+
+def _is_valid_hostname(hostname: str) -> bool:
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", hostname):
+        return False
+
+    return all(
+        label and not label.startswith("-") and not label.endswith("-")
+        for label in hostname.split(".")
+    )
 
 
 class Config:
@@ -70,7 +77,9 @@ class Config:
         "RATELIMIT_STORAGE_URI",
         "redis://localhost:6379/0",
     )
-    CHAT_RATE_LIMIT = os.getenv("CHAT_RATE_LIMIT", "10 per minute; 60 per hour")
+    CHAT_RATE_LIMIT = os.getenv("CHAT_RATE_LIMIT", "5 per minute")
+    CHAT_HISTORY_LIMIT = 20
+    CHAT_HISTORY_RETENTION_HOURS = 48
     ADMIN_TOKEN_SECRET = os.getenv("ADMIN_TOKEN_SECRET", "")
     ADMIN_TOKEN_MAX_AGE_SECONDS = 8 * 60 * 60
     ADMIN_BOOTSTRAP_USERNAME = os.getenv("ADMIN_USERNAME", "")

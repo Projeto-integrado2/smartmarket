@@ -8,5 +8,8 @@ export function useTheme() {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light'
     localStorage.setItem(STORAGE_KEY, dark ? 'dark' : 'light')
   }, [dark])
-  return { dark, toggleDark: () => setDark((value) => !value) }
+  return {
+    dark,
+    toggleDark: () => setDark((value) => !value),
+  }
 }

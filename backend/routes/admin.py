@@ -6,6 +6,7 @@ from flask import Blueprint, current_app, jsonify, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.exc import IntegrityError
 
+from categories import PRODUCT_CATEGORIES
 from extensions import limiter
 from models import AdminUser, Product, db
 
@@ -69,6 +70,93 @@ def _valid_string(value, field: str, *, required: bool = True) -> bool:
     )
 
 
+def _validate_text_fields(data: dict) -> str | None:
+    for field in MAX_TEXT_LENGTHS:
+        if not _valid_string(data[field], field):
+            return f"Campo '{field}' inválido ou excede o limite permitido."
+        data[field] = data[field].strip()
+    return None
+
+
+def _validate_price_and_stock(data: dict) -> str | None:
+    price = data["price"]
+    if isinstance(price, bool) or not isinstance(price, (int, float)) or not isfinite(price) or price <= 0:
+        return "O preço deve ser um número positivo."
+    if type(data["stock"]) is not int or data["stock"] < 0:
+        return "O estoque deve ser um número inteiro não negativo."
+    return None
+
+
+def _normalize_location(location: object) -> dict | None:
+    fields = ("sector", "aisle", "shelf")
+    if not isinstance(location, dict) or any(
+        not isinstance(location.get(field), str)
+        or not location[field].strip()
+        or len(location[field].strip()) > 80
+        for field in fields
+    ):
+        return None
+    return {field: location[field].strip() for field in fields}
+
+
+def _normalize_string_list(values: object) -> list[str] | None:
+    if (
+        not isinstance(values, list)
+        or len(values) > 50
+        or any(
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value.strip()) > 120
+            for value in values
+        )
+    ):
+        return None
+    return [value.strip() for value in values]
+
+
+def _valid_risks(risks: object) -> bool:
+    return (
+        isinstance(risks, list)
+        and len(risks) <= 50
+        and all(
+            isinstance(item, dict)
+            and all(
+                isinstance(item.get(field), str) and item[field].strip()
+                for field in ("ingredient", "level", "description")
+            )
+            and item["level"] in {"Atenção", "Moderado"}
+            for item in risks
+        )
+    )
+
+
+def _valid_nutrition(nutrition: object) -> bool:
+    return (
+        isinstance(nutrition, list)
+        and len(nutrition) <= 50
+        and all(
+            isinstance(item, dict)
+            and all(
+                isinstance(item.get(field), str) and item[field].strip()
+                for field in ("label", "value")
+            )
+            for item in nutrition
+        )
+    )
+
+
+def _normalize_categories(categories: object) -> list[str] | None:
+    if (
+        not isinstance(categories, list)
+        or not categories
+        or len(categories) > len(PRODUCT_CATEGORIES)
+        or any(category not in PRODUCT_CATEGORIES for category in categories)
+        or len(set(categories)) != len(categories)
+    ):
+        return None
+    return categories
+
+
 def _validate_product(payload: object):
     if not isinstance(payload, dict):
         return None, "O corpo da requisição deve ser um objeto JSON."
@@ -77,60 +165,36 @@ def _validate_product(payload: object):
         return None, f"Campos obrigatórios ausentes: {', '.join(sorted(missing))}."
 
     data = dict(payload)
-    for field in MAX_TEXT_LENGTHS:
-        if not _valid_string(data[field], field):
-            return None, f"Campo '{field}' inválido ou excede o limite permitido."
-        data[field] = data[field].strip()
+    error = _validate_text_fields(data)
+    if error:
+        return None, error
+    error = _validate_price_and_stock(data)
+    if error:
+        return None, error
 
-    price = data["price"]
-    if isinstance(price, bool) or not isinstance(price, (int, float)) or not isfinite(price) or price <= 0:
-        return None, "O preço deve ser um número positivo."
-    if type(data["stock"]) is not int or data["stock"] < 0:
-        return None, "O estoque deve ser um número inteiro não negativo."
-
-    location = data["location"]
-    if not isinstance(location, dict) or any(
-        not isinstance(location.get(key), str) or not location[key].strip() or len(location[key].strip()) > 80
-        for key in ("sector", "aisle", "shelf")
-    ):
+    location = _normalize_location(data["location"])
+    if location is None:
         return None, "Localização inválida: informe setor, corredor e prateleira."
 
     for field in ("tags", "allergens"):
-        values = data[field]
-        if (
-            not isinstance(values, list)
-            or len(values) > 50
-            or any(not isinstance(value, str) or not value.strip() or len(value.strip()) > 120 for value in values)
-        ):
+        values = _normalize_string_list(data[field])
+        if values is None:
             return None, f"Campo '{field}' deve ser uma lista de textos válidos."
-        data[field] = [value.strip() for value in values]
+        data[field] = values
 
-    risks = data["risks"]
-    if (
-        not isinstance(risks, list)
-        or len(risks) > 50
-        or any(
-            not isinstance(item, dict)
-            or not all(isinstance(item.get(key), str) and item[key].strip() for key in ("ingredient", "level", "description"))
-            or item["level"] not in {"Atenção", "Moderado"}
-            for item in risks
-        )
-    ):
+    if not _valid_risks(data["risks"]):
         return None, "Riscos nutricionais inválidos."
 
-    nutrition = data["nutrition"]
-    if (
-        not isinstance(nutrition, list)
-        or len(nutrition) > 50
-        or any(
-            not isinstance(item, dict)
-            or not all(isinstance(item.get(key), str) and item[key].strip() for key in ("label", "value"))
-            for item in nutrition
-        )
-    ):
+    if not _valid_nutrition(data["nutrition"]):
         return None, "Informações nutricionais inválidas."
 
-    data["location"] = {key: location[key].strip() for key in ("sector", "aisle", "shelf")}
+    categories = _normalize_categories(data.get("categories", [data["category"]]))
+    if categories is None:
+        return None, "Selecione uma ou mais categorias válidas."
+
+    data["categories"] = categories
+    data["category"] = categories[0]
+    data["location"] = location
     return data, None
 
 
@@ -138,6 +202,7 @@ def _apply_product(product: Product, data: dict) -> None:
     product.name = data["name"]
     product.brand = data["brand"]
     product.category = data["category"]
+    product.categories = data["categories"]
     product.price = data["price"]
     product.unit = data["unit"]
     product.image = data["image"]

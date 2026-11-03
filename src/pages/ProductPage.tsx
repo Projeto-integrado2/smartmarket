@@ -36,7 +36,28 @@ export function ProductPage({ product, products, back, openProduct, onAddToCart 
         </div>
       </div>
       <div className="mt-16 grid gap-6 lg:grid-cols-2">
-        <section className="rounded-[26px] border border-[#173f35]/8 bg-white p-6 sm:p-8"><p className="eyebrow">Porção de referência</p><h2 className="mt-2 text-2xl font-extrabold tracking-[-.03em] text-[#173f35]">Informação nutricional</h2><div className="mt-6 divide-y divide-[#173f35]/8">{product.nutrition.map((item) => <div key={item.label} className="flex justify-between py-3.5 text-sm"><span className="text-[#5f6c67]">{item.label}</span><strong className="text-[#173f35]">{item.value}</strong></div>)}</div></section>
+        <section className="rounded-[26px] border border-[#173f35]/8 bg-white p-6 sm:p-8">
+          <p className="eyebrow">Valores de referência</p>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-2xl font-extrabold tracking-[-.03em] text-[#173f35]">Informação nutricional</h2>
+            <span className="rounded-full bg-[#edf3ee] px-3 py-1.5 text-xs font-extrabold text-[#173f35]">Por 100 g</span>
+          </div>
+          {product.nutrition.length > 0 ? (
+            <table className="mt-6 w-full border-collapse text-left text-sm">
+              <caption className="sr-only">Informação nutricional do produto por 100 gramas</caption>
+              <tbody className="divide-y divide-[#173f35]/10">
+                {product.nutrition.map((item) => (
+                  <tr key={item.label}>
+                    <th scope="row" className="py-3.5 pr-4 font-medium text-[#5f6c67]">{item.label}</th>
+                    <td className="py-3.5 text-right font-extrabold text-[#173f35]">{item.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="mt-6 text-sm text-[#52625c]">Informações nutricionais não cadastradas.</p>
+          )}
+        </section>
         <section className="rounded-[26px] bg-[#f2efe6] p-6 sm:p-8"><p className="eyebrow">Disponibilidade</p><h2 className="mt-2 text-2xl font-extrabold tracking-[-.03em] text-[#173f35]">Produto em estoque</h2><div className="mt-6 h-2 overflow-hidden rounded-full bg-[#173f35]/10"><div className="h-full rounded-full bg-[#e99a36]" style={{ width: `${Math.min(product.stock * 2, 100)}%` }} /></div><div className="mt-4 flex items-center justify-between"><span className="text-sm text-[#5f6c67]">Atualizado há poucos minutos</span><strong className="text-sm text-[#173f35]">{product.stock} unidades</strong></div><p className="mt-8 flex items-start gap-3 text-sm leading-6 text-[#5f6c67]"><Icon name="shield" className="mt-0.5 shrink-0 text-[#275947]" /> O preço exibido corresponde ao valor ativo no sistema desta demonstração.</p></section>
       </div>
       <section className="risk-section mt-6 rounded-[26px] border border-[#d88931]/18 bg-[#fff8e8] p-6 sm:p-8">

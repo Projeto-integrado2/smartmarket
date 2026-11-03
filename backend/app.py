@@ -1,3 +1,4 @@
+import json
 from urllib.parse import urlsplit
 
 from flask import Flask
@@ -7,11 +8,55 @@ from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash
 
 from config import Config, _parse_cors_origins
+from categories import LEGACY_CATEGORY_MAP, PRODUCT_CATEGORIES
 from extensions import limiter
 from models import AdminUser, db
-from routes import admin_bp, catalog_bp, chatbot_bp
+from routes import admin_bp, catalog_bp, categories_bp, chatbot_bp, orders_bp
 from seed import seed_if_empty
 from services import GeminiService
+
+
+def _migrate_product_categories() -> None:
+    columns = {column["name"] for column in inspect(db.engine).get_columns("products")}
+    if "categories" not in columns:
+        with db.engine.begin() as connection:
+            connection.execute(text(
+                "ALTER TABLE products ADD COLUMN categories JSON NOT NULL DEFAULT '[]'"
+            ))
+
+    with db.engine.begin() as connection:
+        products = connection.execute(text(
+            "SELECT id, category, categories FROM products"
+        )).mappings().all()
+        for product in products:
+            legacy_category = product["category"]
+            stored_categories = product["categories"]
+            if isinstance(stored_categories, str):
+                stored_categories = json.loads(stored_categories)
+            categories = list(dict.fromkeys(
+                item for item in stored_categories
+                if isinstance(item, str) and item in PRODUCT_CATEGORIES
+            )) if isinstance(stored_categories, list) else []
+            if not categories and legacy_category in LEGACY_CATEGORY_MAP:
+                categories = [LEGACY_CATEGORY_MAP[legacy_category]]
+            category = categories[0] if categories else ""
+            connection.execute(
+                text("UPDATE products SET category = :category, categories = :categories WHERE id = :id"),
+                {
+                    "id": product["id"],
+                    "category": category,
+                    "categories": json.dumps(categories, ensure_ascii=False),
+                },
+            )
+
+
+def _migrate_chat_message_timestamps() -> None:
+    columns = {column["name"] for column in inspect(db.engine).get_columns("chat_messages")}
+    if "created_at" not in columns:
+        with db.engine.begin() as connection:
+            connection.execute(text(
+                "ALTER TABLE chat_messages ADD COLUMN created_at DATETIME"
+            ))
 
 
 def create_app(config_class: type = Config) -> Flask:
@@ -56,8 +101,10 @@ def create_app(config_class: type = Config) -> Flask:
     )
 
     app.register_blueprint(catalog_bp)
+    app.register_blueprint(categories_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(chatbot_bp)
+    app.register_blueprint(orders_bp)
 
     @app.errorhandler(RateLimitExceeded)
     def handle_rate_limit_exceeded(_error: RateLimitExceeded):
@@ -74,6 +121,8 @@ def create_app(config_class: type = Config) -> Flask:
                 connection.execute(text(
                     "ALTER TABLE products ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"
                 ))
+        _migrate_product_categories()
+        _migrate_chat_message_timestamps()
         username = app.config.get("ADMIN_BOOTSTRAP_USERNAME", "").strip().lower()
         password = app.config.get("ADMIN_BOOTSTRAP_PASSWORD", "")
         if bool(username) != bool(password):

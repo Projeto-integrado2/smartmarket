@@ -8,84 +8,31 @@ import {
   setProductArchived,
   updateAdminStock,
   validateAdminToken,
-  type AdminProductInput,
 } from '@/services/api'
 import { formatPrice } from '@/utils/format'
 import { Icon } from '@/components/Icon'
-
-type ProductDraft = {
-  name: string
-  brand: string
-  category: string
-  price: string
-  unit: string
-  image: string
-  sector: string
-  aisle: string
-  shelf: string
-  description: string
-  stock: string
-  tags: string
-  allergens: string
-  risks: string
-  nutrition: string
-}
-
-const emptyDraft: ProductDraft = {
-  name: '', brand: '', category: '', price: '', unit: '', image: '',
-  sector: '', aisle: '', shelf: '', description: '', stock: '0',
-  tags: '', allergens: '', risks: '[]', nutrition: '[]',
-}
+import {
+  draftFromProduct,
+  emptyDraft,
+  ProductEditorForm,
+  toProductInput,
+  type ProductDraft,
+} from '@/components/admin/ProductEditorForm'
+import { ProductQrDialog } from '@/components/admin/ProductQrDialog'
 
 const inputClass = 'w-full rounded-xl border border-[#173f35]/15 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#2d6a57] focus:ring-2 focus:ring-[#2d6a57]/10'
 const labelClass = 'mb-1.5 block text-xs font-bold text-[#52625c]'
 
-function draftFromProduct(product: Product): ProductDraft {
-  return {
-    name: product.name,
-    brand: product.brand,
-    category: product.category,
-    price: String(product.price),
-    unit: product.unit,
-    image: product.image,
-    sector: product.location.sector,
-    aisle: product.location.aisle,
-    shelf: product.location.shelf,
-    description: product.description,
-    stock: String(product.stock),
-    tags: product.tags.join(', '),
-    allergens: product.allergens.join(', '),
-    risks: JSON.stringify(product.risks, null, 2),
-    nutrition: JSON.stringify(product.nutrition, null, 2),
-  }
-}
-
-function toProductInput(draft: ProductDraft): AdminProductInput {
-  return {
-    name: draft.name,
-    brand: draft.brand,
-    category: draft.category,
-    price: Number(draft.price),
-    unit: draft.unit,
-    image: draft.image,
-    location: { sector: draft.sector, aisle: draft.aisle, shelf: draft.shelf },
-    description: draft.description,
-    stock: Number(draft.stock),
-    tags: draft.tags.split(',').map((value) => value.trim()).filter(Boolean),
-    allergens: draft.allergens.split(',').map((value) => value.trim()).filter(Boolean),
-    risks: JSON.parse(draft.risks),
-    nutrition: JSON.parse(draft.nutrition),
-  }
-}
-
 export function Admin({
+  categories,
   openProduct,
   onProductsChanged,
 }: {
+  categories: string[]
   openProduct: (product: Product) => void
   onProductsChanged: () => Promise<void>
 }) {
-  const [token, setToken] = useState(() => window.sessionStorage.getItem('smartmarket-admin-token'))
+  const [token, setToken] = useState<string | null>(null)
   const [authReady, setAuthReady] = useState(!token)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -99,8 +46,13 @@ export function Admin({
   const [showArchived, setShowArchived] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
+  const [qrProduct, setQrProduct] = useState<Product | null>(null)
   const [draft, setDraft] = useState<ProductDraft>(emptyDraft)
   const [lowStockThreshold, setLowStockThreshold] = useState(10)
+
+  useEffect(() => {
+    window.sessionStorage.removeItem('smartmarket-admin-token')
+  }, [])
 
   const loadProducts = async (currentToken: string) => {
     setLoading(true)
@@ -113,7 +65,6 @@ export function Admin({
       const message = reason instanceof Error ? reason.message : 'Não foi possível carregar os produtos.'
       setError(message)
       if (message.includes('expirou') || message.includes('inválido') || message.includes('necessária')) {
-        window.sessionStorage.removeItem('smartmarket-admin-token')
         setToken(null)
       }
     } finally {
@@ -130,7 +81,6 @@ export function Admin({
       })
       .catch((reason: unknown) => {
         if (cancelled) return
-        window.sessionStorage.removeItem('smartmarket-admin-token')
         setToken(null)
         setError(reason instanceof Error ? reason.message : 'Sua sessão expirou. Entre novamente.')
       })
@@ -144,11 +94,10 @@ export function Admin({
     const term = query.trim().toLocaleLowerCase('pt-BR')
     return products
       .filter((product) => showArchived || product.is_active !== false)
-      .filter((product) => !categoryFilter || product.category === categoryFilter)
-      .filter((product) => !term || `${product.name} ${product.brand} ${product.id} ${product.category}`.toLocaleLowerCase('pt-BR').includes(term))
+      .filter((product) => !categoryFilter || product.categories.includes(categoryFilter))
+      .filter((product) => !term || `${product.name} ${product.brand} ${product.id} ${product.categories.join(' ')}`.toLocaleLowerCase('pt-BR').includes(term))
       .sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'))
   }, [products, query, categoryFilter, showArchived])
-  const categories = [...new Set(products.map((product) => product.category))].sort((left, right) => left.localeCompare(right, 'pt-BR'))
   const activeProducts = products.filter((product) => product.is_active !== false)
   const archivedCount = products.length - activeProducts.length
   const lowStockCount = activeProducts.filter((product) => product.stock < lowStockThreshold).length
@@ -165,7 +114,6 @@ export function Admin({
     setError('')
     try {
       const result = await adminLogin(username, password)
-      window.sessionStorage.setItem('smartmarket-admin-token', result.token)
       setToken(result.token)
       setPassword('')
       setAuthReady(true)
@@ -177,7 +125,6 @@ export function Admin({
   }
 
   const signOut = () => {
-    window.sessionStorage.removeItem('smartmarket-admin-token')
     setToken(null)
     setProducts([])
     setError('')
@@ -193,7 +140,7 @@ export function Admin({
 
   const startEdit = (product: Product) => {
     setEditing(product)
-    setDraft(draftFromProduct(product))
+    setDraft(draftFromProduct(product, categories))
     setFormOpen(true)
     setError('')
   }
@@ -201,6 +148,10 @@ export function Admin({
   const submitProduct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!token) return
+    if (draft.categories.length === 0) {
+      setError('Selecione pelo menos uma categoria.')
+      return
+    }
     setSaving(true)
     setError('')
     try {
@@ -273,6 +224,7 @@ export function Admin({
 
   return (
     <main className="mx-auto min-h-[75vh] max-w-[1180px] px-5 py-12 lg:px-8">
+      {qrProduct && <ProductQrDialog product={qrProduct} onClose={() => setQrProduct(null)} />}
       {notice && <div role="status" className="fixed right-5 top-24 z-50 flex items-center gap-3 rounded-2xl bg-[#173f35] px-5 py-4 text-sm font-bold text-white shadow-2xl"><Icon name="check" className="text-[#f6c453]" />{notice}<button aria-label="Fechar aviso" onClick={() => setNotice('')} className="ml-2"><Icon name="close" size={16} /></button></div>}
       <div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-end">
         <div><p className="eyebrow">Área administrativa</p><h1 className="section-title">Gestão de produtos</h1><p className="mt-3 text-sm text-[#68746f]">Alterações persistidas no catálogo da API.</p></div>
@@ -290,29 +242,15 @@ export function Admin({
       </div>
 
       {formOpen && (
-        <form onSubmit={submitProduct} className="mt-8 rounded-[26px] border border-[#173f35]/10 bg-white p-5 sm:p-7">
-          <div className="flex items-start justify-between gap-4"><div><p className="eyebrow">{editing ? 'Editar cadastro' : 'Novo cadastro'}</p><h2 className="mt-1 text-xl font-extrabold text-[#173f35]">{editing ? editing.name : 'Dados do produto'}</h2>{editing && <p className="mt-1 text-xs text-[#68746f]">Código: {editing.id}</p>}</div><button type="button" className="secondary-button min-h-10 px-4" onClick={() => setFormOpen(false)}>Cancelar</button></div>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {([
-              ['name', 'Nome'], ['brand', 'Marca'], ['category', 'Categoria'],
-              ['price', 'Preço (R$)'], ['unit', 'Unidade'], ['stock', 'Estoque'],
-              ['image', 'URL da imagem'], ['sector', 'Setor'], ['aisle', 'Corredor'],
-              ['shelf', 'Prateleira'],
-            ] as const).map(([key, label]) => <label key={key} className="block"><span className={labelClass}>{label}</span><input className={inputClass} type={key === 'price' || key === 'stock' ? 'number' : 'text'} min={key === 'stock' ? 0 : key === 'price' ? 0.01 : undefined} step={key === 'price' ? '0.01' : key === 'stock' ? '1' : undefined} value={draft[key]} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))} required /></label>)}
-          </div>
-          <label className="mt-4 block"><span className={labelClass}>Descrição</span><textarea className={inputClass} rows={3} value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} required /></label>
-          <details className="mt-5 rounded-2xl bg-[#f8f8f4] p-4">
-            <summary className="cursor-pointer text-sm font-extrabold text-[#173f35]">Informações complementares</summary>
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <label className="block"><span className={labelClass}>Tags (separadas por vírgula)</span><input className={inputClass} value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} /></label>
-              <label className="block"><span className={labelClass}>Alergênicos (separados por vírgula)</span><input className={inputClass} value={draft.allergens} onChange={(event) => setDraft((current) => ({ ...current, allergens: event.target.value }))} /></label>
-              <label className="block"><span className={labelClass}>Riscos (JSON)</span><textarea className={`${inputClass} font-mono text-xs`} rows={6} value={draft.risks} onChange={(event) => setDraft((current) => ({ ...current, risks: event.target.value }))} /></label>
-              <label className="block"><span className={labelClass}>Nutrição (JSON)</span><textarea className={`${inputClass} font-mono text-xs`} rows={6} value={draft.nutrition} onChange={(event) => setDraft((current) => ({ ...current, nutrition: event.target.value }))} /></label>
-            </div>
-            <p className="mt-3 text-xs text-[#68746f]">Riscos: lista com ingredient, level (Atenção ou Moderado) e description. Nutrição: lista com label e value.</p>
-          </details>
-          <div className="mt-5 flex justify-end"><button className="primary-button" disabled={saving}>{saving ? 'Salvando...' : editing ? 'Salvar alterações' : 'Cadastrar produto'}</button></div>
-        </form>
+        <ProductEditorForm
+          categories={categories}
+          draft={draft}
+          editing={editing}
+          saving={saving}
+          setDraft={setDraft}
+          onCancel={() => setFormOpen(false)}
+          onSubmit={submitProduct}
+        />
       )}
 
       <section className="mt-8 overflow-hidden rounded-[26px] border border-[#173f35]/8 bg-white">
@@ -328,10 +266,10 @@ export function Admin({
           <div className="divide-y divide-[#173f35]/8">
             {visibleProducts.map((product) => <div key={product.id} className={`grid gap-4 px-4 py-4 sm:grid-cols-[64px_1.5fr_1fr_1fr_auto] sm:items-center sm:px-6 ${product.is_active === false ? 'bg-[#f8f8f4]' : ''}`}>
               <img src={product.image} alt="" className="h-12 w-12 rounded-xl object-cover sm:h-14 sm:w-14" />
-              <div><button onClick={() => openProduct(product)} className="text-left text-sm font-extrabold text-[#173f35] hover:underline">{product.name}</button><p className="mt-1 text-xs text-[#8a8e8b]">{product.id} · {product.category}</p>{product.is_active === false && <span className="mt-1 inline-block text-xs font-bold text-[#8a5c32]">Arquivado</span>}</div>
+              <div><button onClick={() => openProduct(product)} className="text-left text-sm font-extrabold text-[#173f35] hover:underline">{product.name}</button><p className="mt-1 text-xs text-[#8a8e8b]">{product.id} · {product.categories.join(', ')}</p>{product.is_active === false && <span className="mt-1 inline-block text-xs font-bold text-[#8a5c32]">Arquivado</span>}</div>
               <div className="text-sm text-[#64706b]">{product.location.aisle} · {product.location.shelf}</div>
               <div><strong className="text-sm text-[#173f35]">{formatPrice(product.price)}</strong><div className="mt-1 flex items-center gap-2"><button aria-label={`Diminuir estoque de ${product.name}`} className="grid h-6 w-6 place-items-center rounded-full border border-[#173f35]/15" disabled={product.stock <= 0 || product.is_active === false} onClick={() => void changeStock(product, product.stock - 1)}><Icon name="minus" size={13} /></button><span className={`text-xs font-semibold ${product.stock < lowStockThreshold ? 'text-[#c06d20]' : 'text-[#6b7772]'}`}>{product.stock} em estoque</span><button aria-label={`Aumentar estoque de ${product.name}`} className="grid h-6 w-6 place-items-center rounded-full border border-[#173f35]/15" disabled={product.is_active === false} onClick={() => void changeStock(product, product.stock + 1)}><Icon name="plus" size={13} /></button></div></div>
-              <div className="flex gap-2"><button onClick={() => startEdit(product)} className="grid h-9 w-9 place-items-center rounded-full border border-[#173f35]/10 text-[#52625c] hover:bg-[#edf3ee]" aria-label={`Editar ${product.name}`}><Icon name="edit" size={17} /></button><button onClick={() => void toggleArchive(product)} className="rounded-full border border-[#173f35]/10 px-3 text-xs font-bold text-[#52625c] hover:bg-[#edf3ee]">{product.is_active === false ? 'Restaurar' : 'Arquivar'}</button></div>
+              <div className="flex gap-2"><button onClick={() => setQrProduct(product)} disabled={product.is_active === false} className="grid h-9 w-9 place-items-center rounded-full border border-[#173f35]/10 text-[#52625c] hover:bg-[#edf3ee] disabled:cursor-not-allowed disabled:opacity-40" aria-label={`Gerar QR code de ${product.name}`} title="Gerar QR code"><Icon name="qr" size={17} /></button><button onClick={() => startEdit(product)} className="grid h-9 w-9 place-items-center rounded-full border border-[#173f35]/10 text-[#52625c] hover:bg-[#edf3ee]" aria-label={`Editar ${product.name}`}><Icon name="edit" size={17} /></button><button onClick={() => void toggleArchive(product)} className="rounded-full border border-[#173f35]/10 px-3 text-xs font-bold text-[#52625c] hover:bg-[#edf3ee]">{product.is_active === false ? 'Restaurar' : 'Arquivar'}</button></div>
             </div>)}
           </div>
         )}

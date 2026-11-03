@@ -9,15 +9,15 @@ catalog_bp = Blueprint("catalog", __name__, url_prefix="/api/products")
 def list_products():
     query = Product.query.filter_by(is_active=True)
     category = request.args.get("category")
-    if category and category != "Todos":
-        query = query.filter(Product.category == category)
 
     term = request.args.get("q", "").strip().lower()
     products = [p.to_dict() for p in query.order_by(Product.name).all()]
+    if category and category != "Todos":
+        products = [p for p in products if category in p["categories"]]
     if term:
         products = [
             p for p in products
-            if term in f"{p['name']} {p['brand']} {p['category']}".lower()
+            if term in f"{p['name']} {p['brand']} {' '.join(p['categories'])}".lower()
         ]
     return jsonify(products)
 

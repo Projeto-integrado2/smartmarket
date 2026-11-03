@@ -1,6 +1,6 @@
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useRef, useState } from 'react'
 import type { Product } from '@/types/product'
-import type { CartItem } from './CartDrawer'
+import type { CartItem } from '@/types/cart'
 import { isChatDemoMode, sendChatMessage } from '@/services/api'
 import { formatPrice } from '@/utils/format'
 import { Icon } from './Icon'
@@ -13,13 +13,17 @@ export function Chatbot({ openProduct, cartItems }: {
 }) {
   const [open, setOpen] = useState(false)
   const [input, setInput] = useState('')
+  const [isSending, setIsSending] = useState(false)
+  const sendingRef = useRef(false)
   const [messages, setMessages] = useState<ChatMessage[]>([
     { from: 'bot', text: 'Olá! Posso sugerir produtos para sua refeição, ajudar a escolher itens e consultar o que está no seu carrinho.' },
   ])
 
   const send = async (question: string) => {
     const clean = question.trim()
-    if (!clean) return
+    if (!clean || sendingRef.current) return
+    sendingRef.current = true
+    setIsSending(true)
     setMessages((current) => [...current, { from: 'user', text: clean }])
     setInput('')
     try {
@@ -30,6 +34,9 @@ export function Chatbot({ openProduct, cartItems }: {
       setMessages((current) => [...current, { from: 'bot', ...reply }])
     } catch {
       setMessages((current) => [...current, { from: 'bot', text: 'Não consegui responder agora. Tente novamente em instantes.' }])
+    } finally {
+      sendingRef.current = false
+      setIsSending(false)
     }
   }
 
@@ -46,19 +53,20 @@ export function Chatbot({ openProduct, cartItems }: {
             <div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-[13px] bg-[#f6c453] text-[#173f35]"><Icon name="chat" size={20} /></span><div><h2 className="text-sm font-extrabold">Assistente Smart</h2><p className="mt-0.5 flex items-center gap-1.5 text-[10px] text-white/60"><span className="h-1.5 w-1.5 rounded-full bg-[#79cf9a]" /> {isChatDemoMode ? 'Respostas demonstrativas' : 'Assistente da API'}</p></div></div>
             <button onClick={() => setOpen(false)} className="grid h-9 w-9 place-items-center rounded-full text-white/70 hover:bg-white/10 hover:text-white" aria-label="Fechar assistente"><Icon name="close" size={18} /></button>
           </header>
-          <div className="flex-1 space-y-4 overflow-y-auto p-4">
+          <div className="flex-1 space-y-4 overflow-y-auto p-4" aria-live="polite">
             {messages.map((message, index) => <div key={`${message.from}-${index}`} className={message.from === 'user' ? 'ml-10' : 'mr-7'}>
               <div className={`rounded-[18px] px-4 py-3 text-sm leading-6 ${message.from === 'user' ? 'rounded-br-md bg-[#275947] text-white' : 'rounded-bl-md bg-[#f0eee7] text-[#47554f]'}`}>{message.text}</div>
               {message.products?.map((product) => <button key={product.id} onClick={() => { openProduct(product); setOpen(false) }} className="mt-2 flex w-full items-center gap-3 rounded-[16px] border border-[#173f35]/8 bg-white p-2.5 text-left transition hover:border-[#275947]/30">
                 <img src={product.image} alt="" className="h-11 w-11 rounded-xl object-cover" /><span className="min-w-0 flex-1"><strong className="block truncate text-xs text-[#173f35]">{product.name}</strong><span className="text-[11px] text-[#77807c]">{formatPrice(product.price)}</span></span><Icon name="arrow" size={16} className="text-[#275947]" />
               </button>)}
             </div>)}
+            {isSending && <p className="mr-7 rounded-[18px] rounded-bl-md bg-[#f0eee7] px-4 py-3 text-sm text-[#47554f]" role="status">Assistente está respondendo...</p>}
           </div>
-          {messages.length < 3 && <div className="scrollbar-none flex gap-2 overflow-x-auto px-4 pb-3">{['Sugira uma refeição', 'O que combina com meu carrinho?', 'O que é lactose?'].map((prompt) => <button key={prompt} onClick={() => send(prompt)} className="shrink-0 rounded-full border border-[#173f35]/10 bg-white px-3 py-2 text-[11px] font-bold text-[#52625c]">{prompt}</button>)}</div>}
+          {messages.length < 3 && <div className="scrollbar-none flex gap-2 overflow-x-auto px-4 pb-3">{['Sugira uma refeição', 'O que combina com meu carrinho?', 'O que é lactose?'].map((prompt) => <button key={prompt} type="button" disabled={isSending} onClick={() => send(prompt)} className="shrink-0 rounded-full border border-[#173f35]/10 bg-white px-3 py-2 text-[11px] font-bold text-[#52625c] disabled:cursor-not-allowed disabled:opacity-50">{prompt}</button>)}</div>}
           <form onSubmit={submit} className="flex gap-2 border-t border-[#173f35]/8 bg-white p-3">
             <label className="sr-only" htmlFor="chat-question">Pergunte ao assistente</label>
-            <input id="chat-question" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Peça uma sugestão ou pergunte do carrinho..." className="min-w-0 flex-1 rounded-full bg-[#f3f1eb] px-4 text-sm outline-none focus:ring-2 focus:ring-[#275947]/20" />
-            <button className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#f6c453] text-[#173f35] transition hover:bg-[#ffd168]" aria-label="Enviar pergunta"><Icon name="send" size={18} /></button>
+            <input id="chat-question" value={input} onChange={(event) => setInput(event.target.value)} disabled={isSending} placeholder="Peça uma sugestão ou pergunte do carrinho..." className="min-w-0 flex-1 rounded-full bg-[#f3f1eb] px-4 text-sm outline-none focus:ring-2 focus:ring-[#275947]/20 disabled:opacity-60" />
+            <button type="submit" disabled={isSending || !input.trim()} className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#f6c453] text-[#173f35] transition hover:bg-[#ffd168] disabled:cursor-not-allowed disabled:opacity-50" aria-label="Enviar pergunta"><Icon name="send" size={18} /></button>
           </form>
           <p className="bg-white px-4 pb-3 text-center text-[9px] leading-4 text-[#929894]">Conteúdo educativo. Não substitui orientação médica ou nutricional.</p>
         </section>

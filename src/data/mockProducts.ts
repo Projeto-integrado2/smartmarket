@@ -5,7 +5,8 @@ export const mockProducts: Product[] = [
     id: 'SM-1042',
     name: 'Leite Integral',
     brand: 'Fazenda Clara',
-    category: 'Laticínios',
+    category: 'Alimentos',
+    categories: ['Alimentos', 'Bebidas'],
     price: 5.49,
     unit: '1 litro',
     image:
@@ -31,7 +32,8 @@ export const mockProducts: Product[] = [
     id: 'SM-2087',
     name: 'Espaguete Grano Duro',
     brand: 'Casa Toscana',
-    category: 'Massas',
+    category: 'Alimentos',
+    categories: ['Alimentos'],
     price: 8.9,
     unit: '500 g',
     image:
@@ -57,7 +59,8 @@ export const mockProducts: Product[] = [
     id: 'SM-3091',
     name: 'Tomate Italiano',
     brand: 'Horta Viva',
-    category: 'Hortifruti',
+    category: 'Alimentos',
+    categories: ['Alimentos'],
     price: 7.99,
     unit: 'quilo',
     image:
@@ -83,6 +86,7 @@ export const mockProducts: Product[] = [
     name: 'Café Especial',
     brand: 'Serra Alta',
     category: 'Bebidas',
+    categories: ['Bebidas', 'Alimentos'],
     price: 26.9,
     unit: '250 g',
     image:

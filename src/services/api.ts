@@ -1,11 +1,20 @@
+/**
+ * Coordena os serviços de produtos e as chamadas HTTP/mock do aplicativo.
+ * Recebe filtros, IDs ou mensagens e retorna os dados normalizados da API.
+ */
 import type { Product } from '@/types/product'
+import type { ChatCartItem, ChatReply } from '@/types/chat'
+import type { ChatRequest, ChatResponse } from '@/types/api'
+import type { SimulatedOrder, SimulatedOrderRequest } from '@/types/orders'
+import type { ProductService } from '@/services/types'
 import { mockProducts } from '@/data/mockProducts'
+import { demoProductCategories } from '@/data/categories'
+import { mockAnswer } from '@/services/mockChat'
 
 // Sem VITE_API_URL o app usa dados mockados (modo demonstração).
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '')
 
-export type ChatReply = { text: string; products?: Product[]; status?: 'erro' }
-export type ChatCartItem = { product_id: string; quantity: number }
+export type { ChatCartItem, ChatReply } from '@/types/chat'
 export type AdminProductList = { products: Product[]; low_stock_threshold: number }
 
 export type AdminProductInput = Omit<Product, 'id' | 'is_active'> & {
@@ -69,82 +78,105 @@ export function setProductArchived(token: string, id: string, archived: boolean)
   }, token)
 }
 
-function mockAnswer(question: string, cartItems: ChatCartItem[]): ChatReply {
-  const term = question.toLowerCase()
-  const cart = cartItems.flatMap(({ product_id, quantity }) => {
-    const product = mockProducts.find((item) => item.id === product_id)
-    return product ? [{ product, quantity }] : []
+export async function placeSimulatedOrder(order: SimulatedOrderRequest): Promise<SimulatedOrder> {
+  if (API_URL) {
+    return request<SimulatedOrder>('/api/orders/simulated', {
+      method: 'POST',
+      body: JSON.stringify(order),
+    })
+  }
+
+  const quantities = new Map<string, number>()
+  for (const item of order.items) {
+    quantities.set(item.product_id, (quantities.get(item.product_id) ?? 0) + item.quantity)
+  }
+
+  const products = [...quantities.entries()].map(([id, quantity]) => {
+    const product = mockProducts.find((item) => item.id === id)
+    if (!product || product.stock < quantity) {
+      throw new Error(`Estoque insuficiente para ${product?.name ?? 'um produto'}. Atualize o carrinho.`)
+    }
+    return { product, quantity }
   })
-  const isCartQuestion = ['carrinho', 'no carrinho', 'do carrinho', 'coloquei'].some((word) => term.includes(word))
-  if (isCartQuestion) {
-    if (cart.length === 0) {
-      return {
-        text: 'Seu carrinho está vazio no momento. Para começar, você pode adicionar o Espaguete Grano Duro e o Tomate Italiano, que combinam para uma refeição simples.',
-        products: mockProducts.filter((product) => ['SM-2087', 'SM-3091'].includes(product.id)),
-      }
-    }
 
-    const summary = cart.map(({ product, quantity }) => `${quantity} × ${product.name}`).join(', ')
-    const subtotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0)
-    const complements = mockProducts.filter((product) =>
-      !cart.some((item) => item.product.id === product.id) &&
-      (product.id === 'SM-3091' || product.id === 'SM-1042'),
-    ).slice(0, 2)
-    const suggestions = complements.length
-      ? ` Para complementar, considere ${complements.map((product) => product.name).join(' e ')}.`
-      : ''
-    return {
-      text: `No seu carrinho há ${summary}. O subtotal demonstrativo desses itens é ${subtotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.${suggestions}`,
-      products: complements,
-    }
-  }
+  const items = products.map(({ product, quantity }) => ({
+    product_id: product.id,
+    name: product.name,
+    quantity,
+    unit: product.unit,
+    unit_price: product.price,
+    line_total: Number((product.price * quantity).toFixed(2)),
+  }))
+  const subtotal = Number(items.reduce((total, item) => total + item.line_total, 0).toFixed(2))
 
-  const asksForSuggestions = ['sugest', 'recomend', 'combina', 'ideia', 'o que comprar', 'o que preparar', 'receita', 'jantar', 'almoço'].some((word) => term.includes(word))
-  if (asksForSuggestions) {
-    return {
-      text: 'Para uma refeição simples, combine o Espaguete Grano Duro com Tomate Italiano e finalize com alho, azeite e manjericão. O espaguete contém glúten.',
-      products: mockProducts.filter((product) => ['SM-2087', 'SM-3091'].includes(product.id)),
-    }
-  }
+  products.forEach(({ product, quantity }) => {
+    product.stock -= quantity
+  })
 
-  if (term.includes('lactose') || term.includes('leite')) {
-    return { text: 'A lactose é o açúcar natural do leite. Pessoas intolerantes podem sentir desconforto. Para acompanhar o leite, o Café Especial é uma opção do catálogo; confira os rótulos e respeite suas restrições.', products: [mockProducts[0], mockProducts[3]] }
+  return {
+    order_id: `SM-SIM-${crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`,
+    status: 'simulated',
+    payment_method: order.payment_method,
+    subtotal,
+    items,
   }
-  if (term.includes('glúten') || term.includes('massa') || term.includes('espaguete')) {
-    return { text: 'O Espaguete Grano Duro contém glúten e não é indicado para pessoas com doença celíaca. Para preparar um molho simples, combine-o com Tomate Italiano.', products: [mockProducts[1], mockProducts[2]] }
-  }
-  if (term.includes('café') || term.includes('cafeína')) {
-    return { text: 'A cafeína pode afetar o sono quando consumida em excesso. O Café Especial do catálogo combina com Leite Integral; prefira consumir com moderação, especialmente no fim do dia.', products: [mockProducts[3], mockProducts[0]] }
-  }
-  if (term.includes('tomate')) {
-    return { text: 'O Tomate Italiano pode ser usado em saladas ou em um molho rápido para acompanhar o Espaguete Grano Duro. Você também pode adicionar alho e manjericão.', products: [mockProducts[2], mockProducts[1]] }
-  }
-  return { text: 'Posso sugerir produtos para uma refeição, explicar informações do catálogo ou comentar o que está no seu carrinho. O que você está planejando preparar?', products: [] }
 }
 
-export function fetchProducts(): Promise<Product[]> {
-  if (!API_URL) return Promise.resolve(mockProducts)
-  return request<Product[]>('/api/products')
+const mockProductService: ProductService = {
+  list(params) {
+    const category = params?.category
+    const term = params?.q?.trim().toLowerCase() ?? ''
+    if ((!category || category === 'Todos') && !term) {
+      return Promise.resolve(mockProducts)
+    }
+
+    return Promise.resolve(mockProducts.filter((product) => {
+      const matchesCategory = !category || category === 'Todos' || product.categories.includes(category)
+      const matchesTerm = !term || `${product.name} ${product.brand} ${product.categories.join(' ')}`.toLowerCase().includes(term)
+      return matchesCategory && matchesTerm
+    }))
+  },
+  get(id) {
+    const product = mockProducts.find((item) => item.id === id)
+    if (!product) return Promise.reject(new Error('Produto não encontrado'))
+    return Promise.resolve(product)
+  },
+}
+
+const httpProductService: ProductService = {
+  list(params) {
+    const query = new URLSearchParams()
+    if (params?.category) query.set('category', params.category)
+    if (params?.q !== undefined) query.set('q', params.q)
+    const suffix = query.toString()
+    return request<Product[]>(`/api/products${suffix ? `?${suffix}` : ''}`)
+  },
+  get(id) {
+    return request<Product>(`/api/products/${encodeURIComponent(id)}`)
+  },
+}
+
+export const productService: ProductService = API_URL ? httpProductService : mockProductService
+
+export function fetchCategories(): Promise<string[]> {
+  if (!API_URL) return Promise.resolve([...demoProductCategories])
+  return request<string[]>('/api/categories')
 }
 
 export async function sendChatMessage(message: string, cart: ChatCartItem[] = []): Promise<ChatReply> {
   if (!API_URL) return mockAnswer(message, cart)
+  const payload: ChatRequest = { message, cart, session_id: getChatSessionId() }
   const response = await fetch(`${API_URL}/api/chat`, {
     headers: { 'Content-Type': 'application/json' },
     method: 'POST',
-    body: JSON.stringify({ message, cart, session_id: getChatSessionId() }),
+    body: JSON.stringify(payload),
   })
-  const reply = await response.json() as {
-    text?: string
-    products?: Product[]
-    product?: Product | null
-    status?: 'erro'
-    mensagem?: string
-  }
-  if (reply.status === 'erro' && reply.mensagem) {
+  const reply = await response.json() as ChatResponse
+  if ('status' in reply && reply.status === 'erro' && 'mensagem' in reply && reply.mensagem) {
     return { text: reply.mensagem, status: 'erro' }
   }
   if (!response.ok) throw new Error(`Erro ${response.status} em /api/chat`)
+  if (!('text' in reply)) return { text: '', products: [] }
   return {
     text: reply.text ?? '',
     products: reply.products ?? (reply.product ? [reply.product] : []),

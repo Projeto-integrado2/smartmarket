@@ -10,6 +10,7 @@ class Product(db.Model):
     name = db.Column(db.String(120), nullable=False)
     brand = db.Column(db.String(120), nullable=False)
     category = db.Column(db.String(60), nullable=False, index=True)
+    categories = db.Column(db.JSON, nullable=False, default=list)
     price = db.Column(db.Numeric(10, 2), nullable=False)
     unit = db.Column(db.String(40), nullable=False)
     image = db.Column(db.String(500), nullable=False)
@@ -32,6 +33,7 @@ class Product(db.Model):
             "name": self.name,
             "brand": self.brand,
             "category": self.category,
+            "categories": self.categories,
             "price": float(self.price),
             "unit": self.unit,
             "image": self.image,
