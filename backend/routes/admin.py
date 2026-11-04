@@ -2,13 +2,15 @@ from functools import wraps
 from math import isfinite
 from uuid import uuid4
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy.exc import IntegrityError
+from werkzeug.security import generate_password_hash
 
 from categories import PRODUCT_CATEGORIES
 from extensions import limiter
-from models import AdminUser, Product, db
+from models import AdminUser, CustomerAccount, Product, StoreSetting, db
+from services.auth import access_token_serializer, cpf_digest, create_access_token, normalize_cpf
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 LOW_STOCK_THRESHOLD = 10
@@ -23,10 +25,7 @@ MAX_TEXT_LENGTHS = {
 
 
 def _serializer() -> URLSafeTimedSerializer:
-    secret = current_app.config.get("ADMIN_TOKEN_SECRET")
-    if not isinstance(secret, str) or len(secret) < 32:
-        raise RuntimeError("ADMIN_TOKEN_SECRET deve ter ao menos 32 caracteres.")
-    return URLSafeTimedSerializer(secret, salt="smartmarket-admin-v1")
+    return access_token_serializer()
 
 
 def _error(message: str, status: int):
@@ -42,7 +41,7 @@ def require_admin(view):
             return _error("Autenticação administrativa necessária.", 401)
 
         try:
-            claims = _serializer().loads(
+            claims = access_token_serializer().loads(
                 token,
                 max_age=current_app.config["ADMIN_TOKEN_MAX_AGE_SECONDS"],
             )
@@ -54,9 +53,12 @@ def require_admin(view):
             current_app.logger.exception("Configuração do token administrativo inválida")
             return _error("Autenticação administrativa não configurada.", 503)
 
-        user = db.session.get(AdminUser, claims.get("sub")) if isinstance(claims, dict) else None
+        if not isinstance(claims, dict) or claims.get("role", "admin") != "admin":
+            return _error("Acesso administrativo necessário.", 403)
+        user = db.session.get(AdminUser, claims.get("sub"))
         if user is None or not user.is_active:
             return _error("Usuário administrativo inválido.", 401)
+        g.admin_user = user
         return view(*args, **kwargs)
 
     return wrapped
@@ -235,7 +237,12 @@ def login():
     if user is None or not user.check_password(password):
         return _error("Usuário ou senha inválidos.", 401)
     try:
-        token = _serializer().dumps({"sub": user.id, "username": user.username})
+        token = _serializer().dumps({
+            "sub": user.id,
+            "username": user.username,
+            "name": user.display_name or user.username,
+            "role": "admin",
+        })
     except RuntimeError:
         current_app.logger.exception("Configuração do token administrativo inválida")
         return _error("Autenticação administrativa não configurada.", 503)
@@ -243,6 +250,7 @@ def login():
         "token": token,
         "expires_in": current_app.config["ADMIN_TOKEN_MAX_AGE_SECONDS"],
         "username": user.username,
+        "role": "admin",
     })
 
 
@@ -252,7 +260,132 @@ def current_admin():
     authorization = request.headers.get("Authorization", "")
     token = authorization.partition(" ")[2]
     claims = _serializer().loads(token, max_age=current_app.config["ADMIN_TOKEN_MAX_AGE_SECONDS"])
-    return jsonify({"username": claims["username"]})
+    user = db.session.get(AdminUser, claims["sub"])
+    if user is None or not user.is_active:
+        return _error("Usuário administrativo inválido.", 401)
+    return jsonify({
+        "username": user.username,
+        "name": user.display_name or user.username,
+        "role": "admin",
+    })
+
+
+@admin_bp.get("/settings")
+@require_admin
+def get_admin_settings():
+    settings = db.session.get(StoreSetting, 1)
+    return jsonify({
+        "club_discount_percent": settings.club_discount_percent if settings else 10,
+    })
+
+
+@admin_bp.patch("/settings")
+@require_admin
+def update_admin_settings():
+    payload = request.get_json(silent=True) if request.is_json else None
+    percent = payload.get("club_discount_percent") if isinstance(payload, dict) else None
+    if type(percent) is not int or not 1 <= percent <= 90:
+        return _error("O desconto deve ser um número inteiro entre 1 e 90.", 400)
+    settings = db.session.get(StoreSetting, 1)
+    if settings is None:
+        settings = StoreSetting(id=1, club_discount_percent=percent)
+        db.session.add(settings)
+    else:
+        settings.club_discount_percent = percent
+    db.session.commit()
+    return jsonify({"club_discount_percent": settings.club_discount_percent})
+
+
+@admin_bp.get("/staff")
+@require_admin
+def list_staff():
+    staff = AdminUser.query.filter(
+        AdminUser.cpf_hash.isnot(None),
+    ).order_by(AdminUser.display_name, AdminUser.id).all()
+    return jsonify({
+        "staff": [
+            {
+                "id": user.id,
+                "name": user.display_name or user.username,
+                "cpf": f"***.***.***-{user.cpf_last4 or '****'}",
+                "is_active": user.is_active,
+            }
+            for user in staff
+        ],
+    })
+
+
+@admin_bp.post("/staff")
+@require_admin
+def create_staff():
+    payload = request.get_json(silent=True) if request.is_json else None
+    cpf = normalize_cpf(payload.get("cpf")) if isinstance(payload, dict) else None
+    name = payload.get("name") if isinstance(payload, dict) else None
+    pin = payload.get("pin") if isinstance(payload, dict) else None
+    if cpf is None:
+        return _error("Informe um CPF válido.", 400)
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
+        return _error("Informe um nome válido.", 400)
+    if not isinstance(pin, str) or not pin.isdigit() or len(pin) != 6:
+        return _error("O PIN deve conter exatamente 6 dígitos.", 400)
+    try:
+        digest = cpf_digest(cpf)
+    except RuntimeError:
+        current_app.logger.exception("Segredo de autenticação inválido")
+        return _error("Autenticação não configurada.", 503)
+    if (
+        AdminUser.query.filter_by(cpf_hash=digest).first()
+        or CustomerAccount.query.filter_by(cpf_hash=digest).first()
+    ):
+        return _error("Já existe uma conta associada a este CPF.", 409)
+
+    user = AdminUser(
+        username=f"staff-{uuid4().hex}",
+        display_name=name.strip(),
+        cpf_hash=digest,
+        cpf_last4=cpf[-4:],
+        password_hash=generate_password_hash(pin),
+    )
+    db.session.add(user)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        current_app.logger.exception("Conflito ao cadastrar funcionário")
+        return _error("Não foi possível cadastrar o funcionário.", 409)
+    return jsonify({
+        "id": user.id,
+        "name": user.display_name,
+        "cpf": f"***.***.***-{user.cpf_last4}",
+        "is_active": user.is_active,
+    }), 201
+
+
+@admin_bp.delete("/staff/<int:user_id>")
+@require_admin
+def deactivate_staff(user_id: int):
+    user = db.session.get(AdminUser, user_id)
+    if user is None or user.cpf_hash is None:
+        return _error("Funcionário não encontrado.", 404)
+    if user.id == g.admin_user.id:
+        return _error("Não é possível desativar a própria conta.", 400)
+    active_admins = AdminUser.query.filter_by(is_active=True).count()
+    if active_admins <= 1:
+        return _error("O último administrador ativo não pode ser desativado.", 400)
+    user.is_active = False
+    db.session.commit()
+    return jsonify({"status": "deactivated"})
+
+
+@admin_bp.post("/staff/<int:user_id>/restore")
+@require_admin
+def restore_staff(user_id: int):
+    user = db.session.get(AdminUser, user_id)
+    if user is None or user.cpf_hash is None:
+        return _error("Funcionário não encontrado.", 404)
+    user.is_active = True
+    db.session.commit()
+    return jsonify({"status": "restored"})
 
 
 @admin_bp.get("/products")

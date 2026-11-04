@@ -3,8 +3,10 @@ import { formatPrice } from '@/utils/format'
 import { Icon } from '@/components/Icon'
 import { ProductCard } from '@/components/ProductCard'
 
-export function Home({ products, navigate, openProduct, onAddToCart }: {
+export function Home({ products, repurchaseProducts, repurchaseError, navigate, openProduct, onAddToCart }: {
   products: Product[]
+  repurchaseProducts: Product[]
+  repurchaseError: string
   navigate: (page: string) => void
   openProduct: (product: Product) => void
   onAddToCart: (product: Product) => void
@@ -64,6 +66,16 @@ export function Home({ products, navigate, openProduct, onAddToCart }: {
           </div>
         </div>
       </section>
+
+      {repurchaseProducts.length > 0 && <section className="mx-auto max-w-[1180px] px-5 pt-16 lg:px-8" aria-labelledby="repurchase-title">
+        <div className="mb-7"><p className="eyebrow">Seu histórico</p><h2 id="repurchase-title" className="section-title !text-3xl">Compre Novamente</h2></div>
+        <div className="scrollbar-none flex snap-x gap-5 overflow-x-auto pb-3">
+          {repurchaseProducts.map((product) => <div key={product.id} className="w-[min(82vw,300px)] shrink-0 snap-start sm:w-[280px]">
+            <ProductCard product={product} onOpen={() => openProduct(product)} onAddToCart={() => onAddToCart(product)} />
+          </div>)}
+        </div>
+      </section>}
+      {repurchaseError && <p role="status" className="mx-auto max-w-[1180px] px-5 pt-6 text-sm text-[#68746f] lg:px-8">{repurchaseError}</p>}
 
       <section className="mx-auto max-w-[1180px] px-5 py-20 lg:px-8 lg:py-28">
         <div className="mb-10 flex items-end justify-between gap-6">

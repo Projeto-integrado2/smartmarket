@@ -7,13 +7,16 @@ export function ProductCard({ product, onOpen, onAddToCart }: {
   onOpen: () => void
   onAddToCart: () => void
 }) {
+  const badge = product.tags.includes('Desconto Clube')
+    ? 'Desconto Clube'
+    : product.tags[0]
   return (
     <article className="product-card group overflow-hidden rounded-[24px] border border-[#173f35]/8 bg-white">
       <div className="relative aspect-[1.12] overflow-hidden bg-[#f3f0e7]">
         <button type="button" onClick={onOpen} className="block h-full w-full" aria-label={`Ver detalhes de ${product.name}`}>
           <img src={product.image} alt="" className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.04]" />
         </button>
-        {product.tags[0] && <span className="absolute left-4 top-4 rounded-full bg-[#fffdf8]/92 px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-[.08em] text-[#275947] backdrop-blur">{product.tags[0]}</span>}
+        {badge && <span className={`absolute left-4 top-4 rounded-full px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-[.08em] backdrop-blur ${badge === 'Desconto Clube' ? 'bg-[#f6c453] text-[#173f35]' : 'bg-[#fffdf8]/92 text-[#275947]'}`}>{badge}</span>}
       </div>
       <div className="p-5">
         <p className="mb-1 text-xs font-semibold uppercase tracking-[.1em] text-[#7a827e]">{product.brand}</p>

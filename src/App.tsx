@@ -18,6 +18,9 @@ import { Icon } from '@/components/Icon'
 import { CartDrawer } from '@/components/CartDrawer'
 import { Checkout } from '@/pages/Checkout'
 import type { SimulatedOrder } from '@/types/orders'
+import type { AuthSession } from '@/types/auth'
+import { AccountDialog } from '@/components/AccountDialog'
+import { deleteCustomerAccount, fetchClubSettings, fetchRepurchaseProducts } from '@/services/api'
 
 export default function App() {
   const [initialProductId] = useState(() => getProductIdFromQr(window.location.href))
@@ -35,9 +38,46 @@ export default function App() {
   const [cartNotice, setCartNotice] = useState('')
   const [cartOpen, setCartOpen] = useState(false)
   const [checkoutReturnPage, setCheckoutReturnPage] = useState('home')
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null)
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false)
+  const [clubDiscountPercent, setClubDiscountPercent] = useState<number | null>(null)
+  const [clubSettingsError, setClubSettingsError] = useState('')
+  const [repurchaseProducts, setRepurchaseProducts] = useState<Product[]>([])
+  const [repurchaseError, setRepurchaseError] = useState('')
   const cartNoticeTimer = useRef<number | null>(null)
   const { products, loading, error, refresh: refreshProducts } = useProducts()
   const { categories, loading: categoriesLoading, error: categoriesError } = useCategories()
+
+  useEffect(() => {
+    let active = true
+    fetchClubSettings()
+      .then(({ club_discount_percent }) => {
+        if (active) setClubDiscountPercent(club_discount_percent)
+      })
+      .catch((reason: unknown) => {
+        if (!active) return
+        setClubSettingsError(reason instanceof Error ? reason.message : 'Não foi possível carregar o desconto Clube.')
+      })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    if (!authSession || authSession.user.role !== 'customer') {
+      setRepurchaseProducts([])
+      setRepurchaseError('')
+      return
+    }
+    let active = true
+    fetchRepurchaseProducts(authSession.token)
+      .then(({ products: recent }) => {
+        if (active) setRepurchaseProducts(recent)
+      })
+      .catch((reason: unknown) => {
+        if (!active) return
+        setRepurchaseError(reason instanceof Error ? reason.message : 'Não foi possível carregar compras anteriores.')
+      })
+    return () => { active = false }
+  }, [authSession])
 
   useEffect(() => () => {
     if (cartNoticeTimer.current !== null) window.clearTimeout(cartNoticeTimer.current)
@@ -145,6 +185,27 @@ export default function App() {
     void refreshProducts().catch(() => {
       setCartNotice('Compra simulada registrada; não foi possível atualizar o catálogo. Recarregue a página.')
     })
+    if (authSession?.user.role === 'customer') {
+      void fetchRepurchaseProducts(authSession.token)
+        .then(({ products: recent }) => {
+          setRepurchaseProducts(recent)
+          setRepurchaseError('')
+        })
+        .catch((reason: unknown) => {
+          setRepurchaseError(reason instanceof Error ? reason.message : 'Não foi possível carregar compras anteriores.')
+        })
+    }
+  }
+  const refreshClubSettings = async () => {
+    try {
+      const settings = await fetchClubSettings()
+      setClubDiscountPercent(settings.club_discount_percent)
+      setClubSettingsError('')
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Não foi possível carregar o desconto Clube.'
+      setClubSettingsError(message)
+      throw reason
+    }
   }
   const onSearch = (value: string) => { setQuery(value); navigate('catalog') }
   const catalogReady = !loading && !categoriesLoading && !error && !categoriesError
@@ -157,6 +218,30 @@ export default function App() {
         toggleDark={toggleDark}
         cartCount={cartItems.reduce((total, item) => total + item.quantity, 0)}
         openCart={() => setCartOpen(true)}
+        user={authSession?.user ?? null}
+        onOpenAccount={() => setAccountDialogOpen(true)}
+        onSignOut={() => {
+          setAuthSession(null)
+          if (page === 'admin') navigate('home')
+        }}
+        onDeleteAccount={() => {
+          if (!authSession || authSession.user.role !== 'customer') return
+          const confirmed = window.confirm('Excluir sua conta? Seu perfil será apagado e o histórico de pedidos deixará de ficar vinculado ao CPF.')
+          if (!confirmed) return
+          void deleteCustomerAccount(authSession.token)
+            .then(() => {
+              setAuthSession(null)
+              setCartNotice('Conta excluída; o histórico foi desvinculado do cadastro.')
+            })
+            .catch((reason: unknown) => {
+              setCartNotice(reason instanceof Error ? reason.message : 'Não foi possível excluir a conta.')
+            })
+        }}
+      />
+      <AccountDialog
+        open={accountDialogOpen}
+        onClose={() => setAccountDialogOpen(false)}
+        onAuthenticated={setAuthSession}
       />
       {cartNotice && (
         <div
@@ -189,6 +274,11 @@ export default function App() {
       {page === 'checkout' && (
         <Checkout
           items={cartItems}
+          user={authSession?.user ?? null}
+          token={authSession?.token}
+          clubDiscountPercent={clubDiscountPercent}
+          clubSettingsError={clubSettingsError}
+          onRequestAuth={() => setAccountDialogOpen(true)}
           onBackToCart={backToCart}
           onContinueShopping={() => navigate('catalog')}
           onOrderComplete={handleOrderComplete}
@@ -198,6 +288,8 @@ export default function App() {
       {page === 'home' && (
         <Home
           products={products}
+          repurchaseProducts={repurchaseProducts}
+          repurchaseError={repurchaseError}
           navigate={navigate}
           openProduct={openProduct}
           onAddToCart={handleAddToCart}
@@ -205,7 +297,19 @@ export default function App() {
       )}
       {page === 'catalog' && <Catalog products={products} categories={categories} query={query} onQueryChange={setQuery} openProduct={openProduct} onAddToCart={handleAddToCart} />}
       {page === 'scan' && <Scanner navigate={navigate} openProductById={openProductById} />}
-      {page === 'admin' && <Admin categories={categories} openProduct={openProduct} onProductsChanged={refreshProducts} />}
+      {page === 'admin' && <Admin
+        token={authSession?.token ?? null}
+        user={authSession?.user ?? null}
+        categories={categories}
+        openProduct={openProduct}
+        onProductsChanged={refreshProducts}
+        onClubSettingsChanged={refreshClubSettings}
+        onRequestAuth={() => setAccountDialogOpen(true)}
+        onSignOut={() => {
+          setAuthSession(null)
+          navigate('home')
+        }}
+      />}
       </>}
       <Footer navigate={navigate} />
       <Chatbot openProduct={openProduct} cartItems={cartItems} />

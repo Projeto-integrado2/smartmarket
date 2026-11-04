@@ -50,6 +50,31 @@ const externalStoreStrategy: ChatResponseStrategy = {
   }),
 }
 
+const unavailableProductStrategy: ChatResponseStrategy = {
+  matches: ({ term }) => [
+    'onde encontro', 'onde fica', 'onde posso encontrar', 'tem em outra loja',
+    'outra filial', 'filial',
+  ].some((phrase) => term.includes(phrase)) && mockProducts.some((product) =>
+    product.stock === 0 && product.name.toLowerCase().split(/\s+/).some((word) =>
+      word.length > 3 && term.includes(word),
+    ),
+  ),
+  respond: ({ term }) => {
+    const product = mockProducts.find((item) =>
+      item.stock === 0 && item.name.toLowerCase().split(/\s+/).some((word) =>
+        word.length > 3 && term.includes(word),
+      ),
+    )
+    if (!product) {
+      return { text: 'Não encontrei esse produto sem estoque no catálogo atual. Posso verificar outras opções disponíveis.', products: [] }
+    }
+    return {
+      text: `${product.name} está sem estoque nesta unidade. Na demonstração, há disponibilidade nas Filiais Centro, Norte e Sul; distâncias e estoque são simulados.`,
+      products: [],
+    }
+  },
+}
+
 const suggestionStrategy: ChatResponseStrategy = {
   matches: ({ term }) => [
     'sugest', 'sugir', 'recomend', 'combina', 'ideia', 'o que comprar',
@@ -103,6 +128,7 @@ const defaultStrategy: ChatResponseStrategy = {
 
 const responseStrategies = [
   externalStoreStrategy,
+  unavailableProductStrategy,
   cartStrategy,
   suggestionStrategy,
   lactoseStrategy,

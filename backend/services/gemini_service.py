@@ -53,7 +53,9 @@ USO DO CATÁLOGO
 - Nunca invente produtos, marcas, preços, promoções, estoque ou características.
 - Não afirme que existe uma oferta ou desconto sem dados que confirmem isso.
 - Se um produto estiver sem estoque, informe isso claramente e não o recomende
-  como disponível.
+  como disponível. Quando o cliente perguntar onde encontrar um produto sem
+  estoque nesta unidade, consulte consultar_filiais e esclareça que a lista é
+  demonstrativa.
 - Se não encontrar um item adequado, informe isso com naturalidade e sugira
   uma alternativa cadastrada, quando houver.
 - Diferencie produtos disponíveis no catálogo de ingredientes genéricos
@@ -159,6 +161,20 @@ class GeminiService:
                     name="consultar_carrinho",
                     description="Consulta os produtos, quantidades e subtotal do carrinho atual.",
                     parameters={"type": "OBJECT", "properties": {}},
+                ),
+                types.FunctionDeclaration(
+                    name="consultar_filiais",
+                    description="Consulta filiais demonstrativas para localizar um produto sem estoque nesta unidade.",
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "termo": {
+                                "type": "STRING",
+                                "description": "Nome do produto procurado.",
+                            }
+                        },
+                        "required": ["termo"],
+                    },
                 ),
             ]
         )

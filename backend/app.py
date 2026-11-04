@@ -10,8 +10,17 @@ from werkzeug.security import generate_password_hash
 from config import Config, _parse_cors_origins
 from categories import LEGACY_CATEGORY_MAP, PRODUCT_CATEGORIES
 from extensions import limiter
-from models import AdminUser, db
-from routes import admin_bp, catalog_bp, categories_bp, chatbot_bp, orders_bp
+from models import AdminUser, StoreSetting, db
+from routes import (
+    admin_bp,
+    auth_bp,
+    branches_bp,
+    catalog_bp,
+    categories_bp,
+    chatbot_bp,
+    orders_bp,
+    settings_bp,
+)
 from seed import seed_if_empty
 from services import GeminiService
 
@@ -59,6 +68,62 @@ def _migrate_chat_message_timestamps() -> None:
             ))
 
 
+def _migrate_account_and_order_columns() -> None:
+    admin_columns = {
+        column["name"] for column in inspect(db.engine).get_columns("admin_users")
+    }
+    order_columns = {
+        column["name"] for column in inspect(db.engine).get_columns("simulated_orders")
+    }
+    item_columns = {
+        column["name"] for column in inspect(db.engine).get_columns("simulated_order_items")
+    }
+    with db.engine.begin() as connection:
+        for column, definition in (
+            ("cpf_hash", "VARCHAR(64)"),
+            ("cpf_last4", "VARCHAR(4)"),
+            ("display_name", "VARCHAR(120)"),
+        ):
+            if column not in admin_columns:
+                connection.execute(text(
+                    f"ALTER TABLE admin_users ADD COLUMN {column} {definition}"
+                ))
+        connection.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_admin_users_cpf_hash "
+            "ON admin_users (cpf_hash)"
+        ))
+        for column, definition in (
+            ("customer_id", "INTEGER"),
+            ("original_subtotal", "NUMERIC(10, 2) NOT NULL DEFAULT 0"),
+            ("discount_total", "NUMERIC(10, 2) NOT NULL DEFAULT 0"),
+            ("delivery_requested", "BOOLEAN NOT NULL DEFAULT 0"),
+        ):
+            if column not in order_columns:
+                connection.execute(text(
+                    f"ALTER TABLE simulated_orders ADD COLUMN {column} {definition}"
+                ))
+        connection.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_simulated_orders_customer_id "
+            "ON simulated_orders (customer_id)"
+        ))
+        connection.execute(text(
+            "UPDATE simulated_orders SET original_subtotal = subtotal "
+            "WHERE original_subtotal = 0"
+        ))
+        for column, definition in (
+            ("discounted_unit_price", "NUMERIC(10, 2) NOT NULL DEFAULT 0"),
+            ("discount_percent", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in item_columns:
+                connection.execute(text(
+                    f"ALTER TABLE simulated_order_items ADD COLUMN {column} {definition}"
+                ))
+        connection.execute(text(
+            "UPDATE simulated_order_items SET discounted_unit_price = unit_price "
+            "WHERE discounted_unit_price = 0"
+        ))
+
+
 def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
@@ -85,7 +150,7 @@ def create_app(config_class: type = Config) -> Flask:
         resources={
             r"/api/*": {
                 "origins": app.config["CORS_ORIGINS"],
-                "methods": ["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+                "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                 "allow_headers": ["Content-Type", "Authorization"],
                 "max_age": 600,
             }
@@ -103,8 +168,11 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(catalog_bp)
     app.register_blueprint(categories_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(branches_bp)
     app.register_blueprint(chatbot_bp)
     app.register_blueprint(orders_bp)
+    app.register_blueprint(settings_bp)
 
     @app.errorhandler(RateLimitExceeded)
     def handle_rate_limit_exceeded(_error: RateLimitExceeded):
@@ -116,6 +184,7 @@ def create_app(config_class: type = Config) -> Flask:
 
     with app.app_context():
         db.create_all()
+        _migrate_account_and_order_columns()
         if "is_active" not in {column["name"] for column in inspect(db.engine).get_columns("products")}:
             with db.engine.begin() as connection:
                 connection.execute(text(
@@ -137,6 +206,9 @@ def create_app(config_class: type = Config) -> Flask:
             user = AdminUser(username=username)
             user.password_hash = generate_password_hash(password)
             db.session.add(user)
+            db.session.commit()
+        if db.session.get(StoreSetting, 1) is None:
+            db.session.add(StoreSetting(id=1, club_discount_percent=10))
             db.session.commit()
         seed_if_empty()
 

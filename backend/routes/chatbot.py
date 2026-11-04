@@ -14,7 +14,7 @@ from sqlalchemy import or_
 from extensions import limiter
 from models import ChatMessage, Product, db
 from services.chat_provider import ChatProvider
-from services.chat_tools import buscar_produto, consultar_carrinho
+from services.chat_tools import buscar_produto, consultar_carrinho, consultar_filiais
 
 chatbot_bp = Blueprint("chatbot", __name__, url_prefix="/api/chat")
 
@@ -113,6 +113,7 @@ def _answer_with_gemini(
     tool_functions = {
         "buscar_produto": search_products,
         "consultar_carrinho": lambda: consultar_carrinho(cart_context),
+        "consultar_filiais": consultar_filiais,
     }
 
     try:

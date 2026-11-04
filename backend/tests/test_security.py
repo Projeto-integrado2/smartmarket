@@ -583,7 +583,7 @@ class SecurityTests(unittest.TestCase):
                 1,
             )
 
-    def test_new_simulated_order_expires_orders_older_than_30_days(self):
+    def test_new_simulated_order_expires_orders_older_than_12_months(self):
         app = make_app()
         client = app.test_client()
         from models import SimulatedOrder, SimulatedOrderItem, db
@@ -593,7 +593,7 @@ class SecurityTests(unittest.TestCase):
                 id="SM-SIM-EXPIRED",
                 payment_method="pix",
                 subtotal=1,
-                created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=31),
+                created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=366),
                 items=[
                     SimulatedOrderItem(
                         product_id="SM-1042",
@@ -607,9 +607,9 @@ class SecurityTests(unittest.TestCase):
             )
             recent = SimulatedOrder(
                 id="SM-SIM-RECENT",
-                payment_method="cash",
+                payment_method="pix",
                 subtotal=1,
-                created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=29),
+                created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=364),
             )
             db.session.add_all([expired, recent])
             db.session.commit()
@@ -640,6 +640,7 @@ class SecurityTests(unittest.TestCase):
 
         invalid_payloads = [
             {"payment_method": "real-card", "items": [{"product_id": "SM-1042", "quantity": 1}]},
+            {"payment_method": "cash", "items": [{"product_id": "SM-1042", "quantity": 1}]},
             {"payment_method": [], "items": [{"product_id": "SM-1042", "quantity": 1}]},
             {
                 "payment_method": "card",
@@ -672,7 +673,7 @@ class SecurityTests(unittest.TestCase):
         response = client.post(
             "/api/orders/simulated",
             json={
-                "payment_method": "cash",
+                "payment_method": "pix",
                 "items": [
                     {"product_id": "SM-1042", "quantity": 2},
                     {"product_id": "SM-2087", "quantity": 2},
@@ -685,6 +686,146 @@ class SecurityTests(unittest.TestCase):
             self.assertEqual(db.session.get(Product, "SM-1042").stock, 5)
             self.assertEqual(db.session.get(Product, "SM-2087").stock, 1)
             self.assertEqual(SimulatedOrder.query.count(), 0)
+
+    def test_customer_registration_discount_rebuy_and_account_deletion(self):
+        app = make_app()
+        client = app.test_client()
+        cpf = "52998224725"
+        self.assertEqual(
+            client.post("/api/auth/lookup", json={"cpf": cpf}).status_code,
+            404,
+        )
+
+        registration = client.post(
+            "/api/auth/register",
+            json={
+                "cpf": cpf,
+                "name": "Cliente de teste",
+                "age": 25,
+                "address": "Rua de teste, 10",
+                "pin": "123456",
+            },
+        )
+        self.assertEqual(registration.status_code, 201)
+        self.assertEqual(registration.json["user"]["role"], "customer")
+        token = registration.json["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        from models import CustomerAccount, Product, SimulatedOrder, db
+        from services.auth import cpf_digest
+        with app.app_context():
+            customer = CustomerAccount.query.filter_by(
+                cpf_hash=cpf_digest(cpf),
+            ).one()
+            self.assertNotIn(cpf, customer.cpf_hash)
+            self.assertTrue(customer.check_pin("123456"))
+            self.assertNotEqual(customer.pin_hash, "123456")
+            product = db.session.get(Product, "SM-1042")
+            product.tags = [*product.tags, "Desconto Clube"]
+            db.session.commit()
+
+        wrong_pin = client.post(
+            "/api/auth/login",
+            json={"cpf": cpf, "pin": "654321"},
+        )
+        self.assertEqual(wrong_pin.status_code, 401)
+        login = client.post(
+            "/api/auth/login",
+            json={"cpf": cpf, "pin": "123456"},
+        )
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(login.json["user"]["role"], "customer")
+
+        forbidden_admin = client.get("/api/admin/staff", headers=headers)
+        self.assertEqual(forbidden_admin.status_code, 403)
+        order_response = client.post(
+            "/api/orders/simulated",
+            headers=headers,
+            json={
+                "payment_method": "pix",
+                "delivery_requested": True,
+                "items": [{"product_id": "SM-1042", "quantity": 1}],
+            },
+        )
+        self.assertEqual(order_response.status_code, 201)
+        self.assertEqual(order_response.json["original_subtotal"], 5.49)
+        self.assertEqual(order_response.json["discount_total"], 0.55)
+        self.assertEqual(order_response.json["subtotal"], 4.94)
+        self.assertTrue(order_response.json["delivery_requested"])
+        self.assertEqual(order_response.json["items"][0]["discount_percent"], 10)
+
+        repurchases = client.get("/api/orders/rebuy", headers=headers)
+        self.assertEqual(repurchases.status_code, 200)
+        self.assertIn("SM-1042", {item["id"] for item in repurchases.json["products"]})
+
+        deleted = client.delete("/api/auth/me", headers=headers)
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(
+            client.post("/api/auth/lookup", json={"cpf": cpf}).status_code,
+            404,
+        )
+        with app.app_context():
+            order = db.session.get(SimulatedOrder, order_response.json["order_id"])
+            self.assertIsNone(order.customer_id)
+            self.assertEqual(CustomerAccount.query.count(), 0)
+
+    def test_employee_cpf_login_and_admin_discount_settings(self):
+        app = make_app()
+        client = app.test_client()
+        admin_login = client.post(
+            "/api/admin/auth/login",
+            json={"username": "admin", "password": "test-password-secure"},
+        )
+        self.assertEqual(admin_login.json["role"], "admin")
+        admin_headers = {"Authorization": f"Bearer {admin_login.json['token']}"}
+
+        created = client.post(
+            "/api/admin/staff",
+            headers=admin_headers,
+            json={"cpf": "11144477735", "name": "Funcionário", "pin": "123456"},
+        )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(created.json["cpf"], "***.***.***-7735")
+        self.assertEqual(
+            client.post("/api/auth/lookup", json={"cpf": "11144477735"}).status_code,
+            200,
+        )
+        employee_login = client.post(
+            "/api/auth/login",
+            json={"cpf": "11144477735", "pin": "123456"},
+        )
+        self.assertEqual(employee_login.status_code, 200)
+        self.assertEqual(employee_login.json["user"]["role"], "admin")
+        employee_headers = {"Authorization": f"Bearer {employee_login.json['token']}"}
+        self.assertEqual(client.get("/api/admin/settings", headers=employee_headers).status_code, 200)
+
+        updated = client.patch(
+            "/api/admin/settings",
+            headers=admin_headers,
+            json={"club_discount_percent": 20},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(client.get("/api/settings/club").json["club_discount_percent"], 20)
+        self.assertEqual(
+            client.delete(f"/api/admin/staff/{created.json['id']}", headers=admin_headers).status_code,
+            200,
+        )
+        self.assertEqual(client.get("/api/admin/settings", headers=employee_headers).status_code, 401)
+        self.assertEqual(
+            client.post(
+                f"/api/admin/staff/{created.json['id']}/restore",
+                headers=admin_headers,
+            ).status_code,
+            200,
+        )
+
+    def test_demo_branch_availability_endpoint(self):
+        client = make_app().test_client()
+        response = client.get("/api/branches/SM-1042")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["demo"])
+        self.assertGreater(len(response.json["branches"]), 0)
+        self.assertTrue(all(branch["stock"] > 0 for branch in response.json["branches"]))
 
 
 if __name__ == "__main__":

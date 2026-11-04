@@ -6,6 +6,7 @@ import type { Product } from '@/types/product'
 import type { ChatCartItem, ChatReply } from '@/types/chat'
 import type { ChatRequest, ChatResponse } from '@/types/api'
 import type { SimulatedOrder, SimulatedOrderRequest } from '@/types/orders'
+import type { AuthSession, AuthUser, BranchAvailability } from '@/types/auth'
 import type { ProductService } from '@/services/types'
 import { mockProducts } from '@/data/mockProducts'
 import { demoProductCategories } from '@/data/categories'
@@ -16,6 +17,15 @@ const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\
 
 export type { ChatCartItem, ChatReply } from '@/types/chat'
 export type AdminProductList = { products: Product[]; low_stock_threshold: number }
+export type AdminStaff = { id: number; name: string; cpf: string; is_active: boolean }
+export type ClubSettings = { club_discount_percent: number }
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
 
 export type AdminProductInput = Omit<Product, 'id' | 'is_active'> & {
   location: { sector: string; aisle: string; shelf: string }
@@ -33,13 +43,103 @@ async function request<T>(path: string, init?: RequestInit, token?: string): Pro
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: string } | null
-    throw new Error(body?.error ?? `Erro ${response.status} em ${path}`)
+    throw new ApiError(body?.error ?? `Erro ${response.status} em ${path}`, response.status)
   }
   return response.json() as Promise<T>
 }
 
 export function isApiConfigured(): boolean {
   return Boolean(API_URL)
+}
+
+export async function lookupAccount(cpf: string): Promise<boolean> {
+  try {
+    await request<{ requires_pin: boolean }>('/api/auth/lookup', {
+      method: 'POST',
+      body: JSON.stringify({ cpf }),
+    })
+    return true
+  } catch (reason) {
+    if (reason instanceof ApiError && reason.status === 404) return false
+    throw reason
+  }
+}
+
+export function loginWithCpf(cpf: string, pin: string): Promise<AuthSession> {
+  return request<AuthSession>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ cpf, pin }),
+  })
+}
+
+export function registerCustomer(input: {
+  cpf: string
+  name: string
+  age: number
+  address: string
+  pin: string
+}): Promise<AuthSession> {
+  return request<AuthSession>('/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteCustomerAccount(token: string): Promise<{ status: 'deleted' }> {
+  return request('/api/auth/me', { method: 'DELETE' }, token)
+}
+
+export function fetchClubSettings(): Promise<ClubSettings> {
+  if (!API_URL) return Promise.resolve({ club_discount_percent: 10 })
+  return request<ClubSettings>('/api/settings/club')
+}
+
+export function fetchAdminClubSettings(token: string): Promise<ClubSettings> {
+  return request<ClubSettings>('/api/admin/settings', undefined, token)
+}
+
+export function updateAdminClubSettings(token: string, club_discount_percent: number): Promise<ClubSettings> {
+  return request<ClubSettings>('/api/admin/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({ club_discount_percent }),
+  }, token)
+}
+
+export function fetchAdminStaff(token: string): Promise<{ staff: AdminStaff[] }> {
+  return request('/api/admin/staff', undefined, token)
+}
+
+export function createAdminStaff(token: string, input: { cpf: string; name: string; pin: string }): Promise<AdminStaff> {
+  return request('/api/admin/staff', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }, token)
+}
+
+export function deactivateAdminStaff(token: string, staffId: number): Promise<void> {
+  return request<void>(`/api/admin/staff/${staffId}`, { method: 'DELETE' }, token)
+}
+
+export function restoreAdminStaff(token: string, staffId: number): Promise<void> {
+  return request<void>(`/api/admin/staff/${staffId}/restore`, { method: 'POST' }, token)
+}
+
+export function fetchNearbyBranches(productId: string): Promise<{ demo: boolean; branches: BranchAvailability[] }> {
+  if (!API_URL) {
+    return Promise.resolve({
+      demo: true,
+      branches: [
+        { name: 'Filial Centro (simulada)', distance_km: 1.2, address: 'Endereço demonstrativo — Centro', stock: 3 },
+        { name: 'Filial Norte (simulada)', distance_km: 3.8, address: 'Endereço demonstrativo — Zona Norte', stock: 4 },
+        { name: 'Filial Sul (simulada)', distance_km: 5.4, address: 'Endereço demonstrativo — Zona Sul', stock: 5 },
+      ],
+    })
+  }
+  return request<{ demo: boolean; branches: BranchAvailability[] }>(`/api/branches/${encodeURIComponent(productId)}`)
+}
+
+export function fetchRepurchaseProducts(token: string): Promise<{ products: Product[] }> {
+  return request('/api/orders/rebuy', undefined, token)
 }
 
 export function adminLogin(username: string, password: string): Promise<{ token: string; expires_in: number; username: string }> {
@@ -78,12 +178,12 @@ export function setProductArchived(token: string, id: string, archived: boolean)
   }, token)
 }
 
-export async function placeSimulatedOrder(order: SimulatedOrderRequest): Promise<SimulatedOrder> {
+export async function placeSimulatedOrder(order: SimulatedOrderRequest, token?: string): Promise<SimulatedOrder> {
   if (API_URL) {
     return request<SimulatedOrder>('/api/orders/simulated', {
       method: 'POST',
       body: JSON.stringify(order),
-    })
+    }, token)
   }
 
   const quantities = new Map<string, number>()
@@ -105,6 +205,9 @@ export async function placeSimulatedOrder(order: SimulatedOrderRequest): Promise
     quantity,
     unit: product.unit,
     unit_price: product.price,
+    discounted_unit_price: product.price,
+    discount_percent: 0,
+    original_line_total: Number((product.price * quantity).toFixed(2)),
     line_total: Number((product.price * quantity).toFixed(2)),
   }))
   const subtotal = Number(items.reduce((total, item) => total + item.line_total, 0).toFixed(2))
@@ -118,6 +221,9 @@ export async function placeSimulatedOrder(order: SimulatedOrderRequest): Promise
     status: 'simulated',
     payment_method: order.payment_method,
     subtotal,
+    original_subtotal: subtotal,
+    discount_total: 0,
+    delivery_requested: order.delivery_requested ?? false,
     items,
   }
 }

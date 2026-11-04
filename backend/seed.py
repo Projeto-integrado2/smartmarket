@@ -11,7 +11,7 @@ PRODUCTS = [{'id': 'SM-1042',
   'location': {'sector': 'Laticínios', 'aisle': 'Corredor 04', 'shelf': 'Gôndola B · Prateleira 2'},
   'description': 'Leite integral pasteurizado, fonte natural de cálcio e proteínas. Produzido com '
                  'leite de fazendas selecionadas.',
-  'tags': ['Mais vendido', 'Fonte de cálcio'],
+  'tags': ['Mais vendido', 'Fonte de cálcio', 'Desconto Clube'],
   'allergens': ['Contém lactose', 'Contém leite'],
   'risks': [{'ingredient': 'Gorduras saturadas',
              'level': 'Moderado',

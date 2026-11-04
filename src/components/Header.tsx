@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from 'react'
+import type { AuthUser } from '@/types/auth'
 import { Icon } from './Icon'
 import { Logo } from './Logo'
 
@@ -9,6 +10,10 @@ export function Header({
   toggleDark,
   cartCount,
   openCart,
+  user,
+  onOpenAccount,
+  onSignOut,
+  onDeleteAccount,
 }: {
   navigate: (page: string) => void
   onSearch: (value: string) => void
@@ -16,8 +21,13 @@ export function Header({
   toggleDark: () => void
   cartCount: number
   openCart: () => void
+  user: AuthUser | null
+  onOpenAccount: () => void
+  onSignOut: () => void
+  onDeleteAccount: () => void
 }) {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const value = new FormData(event.currentTarget).get('search')?.toString() ?? ''
@@ -33,8 +43,28 @@ export function Header({
         </form>
         <nav className="hidden items-center gap-7 lg:flex">
           <button onClick={() => navigate('catalog')} className="nav-link">Produtos</button>
-          <button onClick={() => navigate('admin')} className="nav-link">Painel</button>
         </nav>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => user ? setAccountMenuOpen((open) => !open) : onOpenAccount()}
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[#173f35]/10 bg-white text-[#173f35] transition hover:-translate-y-0.5"
+            aria-label={user?.role === 'admin' ? 'Abrir menu administrativo' : user ? `Conta de ${user.name}` : 'Entrar ou cadastrar'}
+            aria-expanded={accountMenuOpen}
+            title={user?.role === 'admin' ? 'Menu administrativo' : user ? user.name : 'Entrar'}
+          >
+            <Icon name={user?.role === 'admin' ? 'settings' : 'user'} size={18} />
+          </button>
+          {accountMenuOpen && user && (
+            <div className="absolute right-0 top-12 z-50 min-w-52 rounded-2xl border border-[#173f35]/10 bg-white p-2 shadow-xl">
+              <p className="px-3 py-2 text-xs font-bold text-[#8a8e8b]">{user.name}</p>
+              <button onClick={() => { navigate('home'); setAccountMenuOpen(false) }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-[#52625c] hover:bg-[#edf3ee]">Loja</button>
+              {user.role === 'admin' && <button onClick={() => { navigate('admin'); setAccountMenuOpen(false) }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-[#52625c] hover:bg-[#edf3ee]">Painel administrativo</button>}
+              {user.role === 'customer' && <button onClick={() => { onDeleteAccount(); setAccountMenuOpen(false) }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-red-700 hover:bg-red-50">Excluir minha conta</button>}
+              <button onClick={() => { onSignOut(); setAccountMenuOpen(false) }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-bold text-red-700 hover:bg-red-50">Sair</button>
+            </div>
+          )}
+        </div>
         <button
           onClick={openCart}
           className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full border border-[#173f35]/10 bg-white text-[#173f35] transition hover:-translate-y-0.5"
@@ -61,7 +91,9 @@ export function Header({
             <input name="search" aria-label="Buscar produtos" placeholder="Buscar produtos" className="h-11 w-full rounded-full bg-[#f4f2eb] pl-11 pr-4 text-sm outline-none" />
           </form>
           <button onClick={() => { navigate('catalog'); setMobileOpen(false) }} className="mobile-link">Ver produtos <Icon name="arrow" size={17} /></button>
-          <button onClick={() => { navigate('admin'); setMobileOpen(false) }} className="mobile-link">Painel administrativo <Icon name="arrow" size={17} /></button>
+          {user?.role === 'admin' && <button onClick={() => { navigate('admin'); setMobileOpen(false) }} className="mobile-link">Painel administrativo <Icon name="settings" size={17} /></button>}
+          {!user && <button onClick={() => { onOpenAccount(); setMobileOpen(false) }} className="mobile-link">Entrar ou cadastrar <Icon name="user" size={17} /></button>}
+          {user && <button onClick={() => { onSignOut(); setMobileOpen(false) }} className="mobile-link">Sair da conta <Icon name="user" size={17} /></button>}
           <button onClick={() => { navigate('scan'); setMobileOpen(false) }} className="mobile-link">Escanear QR <Icon name="scan" size={17} /></button>
           <button onClick={toggleDark} className="mobile-link">{dark ? 'Ativar modo claro' : 'Ativar modo escuro'} <Icon name={dark ? 'sun' : 'moon'} size={17} /></button>
         </div>
